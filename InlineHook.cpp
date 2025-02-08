@@ -184,13 +184,13 @@ int UninstallHookCreateFileA() {
 	memcpy(g_pCreateFileAFunc, g_savedCode, 5);
 	// change back the memory protection constant
 	VirtualProtect(MBI.BaseAddress, 5, dwOldProtect, &dwOldProtect);
-	printf("uninstall CreateFileA");
+	printf("uninstall CreateFileA\n");
 	return 0;
 
 }
 /*=========================Hook ReadFile=============================*/
 // create the Trampoline function 
-// if function starts with push xx, push xxxx, call :
+// Trampoline function for case: push xx, push xxxx, call
 __declspec(naked) BOOL WINAPI TrampolineReadFileLong(HANDLE hFile,
 	LPVOID lpBuffer,
 	DWORD nNumberOfBytesToRead,
@@ -198,14 +198,14 @@ __declspec(naked) BOOL WINAPI TrampolineReadFileLong(HANDLE hFile,
 	LPOVERLAPPED lpOverlapped) {
 
 	__asm {
-		push g_pushVal1
-		push g_pushVal2
-		jmp g_jmpBackAddrReadFile
+		push g_pushVal1    // Push the first saved value
+		push g_pushVal2    // Push the second saved value
+		jmp g_jmpBackAddrReadFile   // Jump back to the original function's address
 	}
 
 }
 
-// if the function start with mov edi, edi
+// Trampoline function for case: mov edi, edi
 __declspec(naked) BOOL WINAPI TrampolineReadFileShort(HANDLE hFile,
 	LPVOID lpBuffer,
 	DWORD nNumberOfBytesToRead,
@@ -226,18 +226,20 @@ BOOL WINAPI HookedReadFile(HANDLE hFile,
 	LPDWORD lpNumberOfBytesRead,
 	LPOVERLAPPED lpOverlapped) {
 	BOOL result;
+	// Call the original ReadFile via the appropriate trampoline function
 	if (g_bIsPush) {
 		result = TrampolineReadFileLong(hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, lpOverlapped);
 	}
 	else {
 		result = TrampolineReadFileShort(hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, lpOverlapped);
 	}
-
+	// If the target module is detected and data is successfully read, save it to a file
 	if (IsTargetModule() && result && *lpNumberOfBytesRead > 0) {
 		saveBufferToFile("result.txt", lpBuffer, *lpNumberOfBytesRead);
 		printf("printing lpBuffer: %s\n numberRead: %d\n", lpBuffer, *lpNumberOfBytesRead);
 	}
 #ifdef _DEBUG
+	// Debugging: Print the file path being accessed
 	TCHAR path[MAX_PATH];
 	DWORD dwRet;
 	dwRet = GetFinalPathNameByHandle(hFile, path, MAX_PATH,
@@ -257,36 +259,36 @@ int InstallHookReadFile() {
 		printf("failed to get hModule");
 		return -1;
 	}
-	// get the original address of the ReadFile function
+	// Retrieve the original address of the ReadFile function
 	PBYTE originalReadFile = (PBYTE)GetProcAddress(hModule, "ReadFile");
 
 	if (!originalReadFile) {
 		printf("failed to get orginal ReadFile Address");
 		return -1;
 	}
-	// get the first two bytes of readfile to check if it starts with a jmp
+	//Check if ReadFile starts with a JMP instruction
 	if (*(WORD*)originalReadFile == 0x25FF) {
-		// JMP + pointer to another memory location that contains the actual address of the function
+		// JMP + pointer to another memory location containing the actual function address
 		DWORD indirectPointer = *(DWORD*)(originalReadFile + 2);
 		// dereference the pointer to get the real address of the function
 		DWORD realAddress = *(DWORD*)indirectPointer;
 		g_pReadFileFunc = (PBYTE)realAddress;
 	}
 	else {
-		// if not start with JMP, the original address get from GetProcAddress  is the entry point of the ReadFile function
+		//  If no JMP, use original address as entry point
 		g_pReadFileFunc = originalReadFile;
 	}
 
 	// prepare the jmp instruction: jmp + 4-byte relative offset
 	BYTE newEntry[5] = { 0 };
 	newEntry[0] = 0xE9;  //jmp
-	// calculate the offset between next instrution right after jmp and the hook function
+	// Calculate the offset between the hook function and the next instruction after jmp
 	//offset = HookedFunAddr - SystemFunc - CodeLength
 	DWORD dwOffset;
 	dwOffset = (DWORD)HookedReadFile - (DWORD)g_pReadFileFunc - 5;
 	*(DWORD*)(newEntry + 1) = dwOffset;
 
-	//change the memory protection constant
+	//change the memory protection constant to allow writing
 	DWORD dwOldProtect;
 	MEMORY_BASIC_INFORMATION MBI = { 0 };
 	VirtualQuery(g_pReadFileFunc, &MBI, sizeof(MEMORY_BASIC_INFORMATION));
@@ -295,13 +297,14 @@ int InstallHookReadFile() {
 	if (*(BYTE*)g_pReadFileFunc == 0x8B) {
 		//start with mov edi, edi
 		g_jmpBackAddrReadFile = g_pReadFileFunc + 5;
+		memcpy(g_oldCode, g_pReadFileFunc, 5);
 	}
 	else if (*(BYTE*)g_pReadFileFunc == 0x6A) {
 		// start with push 
 			// save the first 7 bytes from the entry point of readFile
 		memcpy(g_oldCode, g_pReadFileFunc, 7);
-		g_pushVal1 = (DWORD) * (BYTE*)(g_oldCode + 1);
-		g_pushVal2 = *(DWORD*)(g_oldCode + 3);
+		g_pushVal1 = (DWORD) * (BYTE*)(g_oldCode + 1);  // Extract value from first push
+		g_pushVal2 = *(DWORD*)(g_oldCode + 3);		// Extract value from second push
 		g_jmpBackAddrReadFile = g_pReadFileFunc + 7;
 		g_bIsPush = TRUE;
 	}
@@ -310,9 +313,9 @@ int InstallHookReadFile() {
 		return -1;
 	}
 
-	// change the firt 5 bytes of the entry point to jmp offset
+	//Overwrite the first 5 bytes of the target function with the jmp instruction
 	memcpy(g_pReadFileFunc, newEntry, 5);
-	// change back the memory protection constant
+	//Restore original memory protection
 	VirtualProtect(MBI.BaseAddress, 5, dwOldProtect, &dwOldProtect);
 	return 0;
 }
@@ -350,6 +353,7 @@ int UninstallHookReadFile() {
 
 	// change back the memory protection constant
 	VirtualProtect(MBI.BaseAddress, 7, dwOldProtect, &dwOldProtect);
+	printf("UninstallHookReadFile\n");
 	return 0;
 
 }
@@ -395,6 +399,7 @@ int main()
 	}
 
 	CloseHandle(hFile);
+
 
 	return 0;
 }
