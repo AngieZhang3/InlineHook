@@ -127,3 +127,43 @@ BOOL WINAPI HookedReadFile(HANDLE hFile,
 	return result;
 }
 ```
+### 4. Create a Trampoline Function
+To ensure precise control over every instruction in the trampoline function, it must be defined as a naked function. This prevents the compiler from automatically inserting additional instructions, such as stack-saving operations or frame pointer setups, which could interfere with the function's behavior.
+Additionally, the trampoline function must have the same type signature as the target function. This ensures compatibility and allows the original function to be invoked seamlessly.
+
+In this project, we implemented two trampoline functions to handle different cases observed in ReadFile across Windows 7, 10, and 11:
+- TrampolineReadFileLong: Handles cases where ReadFile starts with two push instructions followed by a call.
+- TrampolineReadFileShort: Handles cases where ReadFile starts with the instruction sequence mov edi, edi, followed by push ebp and mov ebp, esp.
+
+The implementation of these trampoline functions is shown below:
+```
+// create the Trampoline function 
+// // Trampoline function for case: push xx, push xxxx, call
+__declspec(naked) BOOL WINAPI TrampolineReadFileLong(HANDLE hFile,
+	LPVOID lpBuffer,
+	DWORD nNumberOfBytesToRead,
+	LPDWORD lpNumberOfBytesRead,
+	LPOVERLAPPED lpOverlapped) {
+
+	__asm {
+		push g_pushVal1  // Push the first saved value
+		push g_pushVal2    // Push the second saved value
+		jmp g_jmpBackAddrReadFile  // Jump back to the "call" instruction
+	}
+
+}
+
+// Trampoline function for case: mov edi, edi
+__declspec(naked) BOOL WINAPI TrampolineReadFileShort(HANDLE hFile,
+	LPVOID lpBuffer,
+	DWORD nNumberOfBytesToRead,
+	LPDWORD lpNumberOfBytesRead,
+	LPOVERLAPPED lpOverlapped) {
+	__asm {
+		mov edi, edi
+		push ebp
+		mov ebp, esp
+		jmp g_jmpBackAddrReadFile;
+	}
+}
+```
