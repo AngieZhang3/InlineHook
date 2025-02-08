@@ -6,10 +6,11 @@ which redirects execution to a custom hook function.
 When the program calls the target function, it first jumps to the hook function, executes the custom code, and then returns to continue the original function's execution. 
 This method effectively creates a detour in the program's normal execution path, allowing for runtime modification of program behavior without changing the original source code.
 ## Implementation 
-This project demonstrates the use of Inline Hooks to intercept two Windows APIs: CreateFileA and ReadFile. Below, I use ReadFile as an example to explain the hook implementation process.
+This project demonstrates the use of Inline Hooks to intercept two Windows APIs: CreateFileA and ReadFile. Below, we use ReadFile as an example to explain the hook implementation process.
 ### Steps to Implement the Hook
 ### 1. Locate the Target Function
-The first step is identifying the memory address of the function to be intercepted, referred to as the "Target Function." In this project, the target functions are CreateFileA and ReadFile. To correctly locate their addresses, I analyzed them using x32dbg on Windows 7, 10, and 11.
+The first step is identifying the memory address of the function to be intercepted, referred to as the "Target Function." <br>
+In this project, the target functions are CreateFileA and ReadFile. To correctly locate their addresses, we analyzed them using x32dbg on Windows 7, 10, and 11.
 For ReadFile, the disassembly varies across these operating systems:
 - Windows 7:<br>
   The function call directly points to the entry of ReadFile.
@@ -57,5 +58,38 @@ The following code demonstrates how to locate the address of ReadFile across the
 		g_pReadFileFunc = originalReadFile;
 	}
 ```
+### 2. Backup Original Instructions
+Save the first few bytes of the target function's instructions, which will be overwritten. These saved instructions are used later in the trampoline function to ensure proper execution. 
+From the analysis of the ReadFile function, there are two possible cases for its starting instructions:
+- Case 1: The function starts with two push instructions followed by a call. These two push instructions take up 7 bytes.
+- Case 2: The function starts with mov edi, edi, followed by push ebp, and then mov ebp, esp. These instructions take up 5 bytes. <br>
+
+To implement the hook, we replace the first 5 bytes of the target function with a jmp instruction (1 byte) and a 4-byte offset. However, to ensure proper execution of the trampoline function, we back up:
+   - The first 7 bytes for Case 1.
+   - The first 5 bytes for Case 2.
+     
+The following code demonstrates how to handle these two cases:
+```
+	if (*(BYTE*)g_pReadFileFunc == 0x8B) {
+		//case 2: start with mov edi, edi
+		g_jmpBackAddrReadFile = g_pReadFileFunc + 5;
+		memcpy(g_oldCode, g_pReadFileFunc, 5);
+	}
+	else if (*(BYTE*)g_pReadFileFunc == 0x6A) {
+		// case 1: start with push
+		// save the first 7 bytes from the entry point of readFile
+		memcpy(g_oldCode, g_pReadFileFunc, 7);
+		g_pushVal1 = (DWORD) * (BYTE*)(g_oldCode + 1); // Extract value from first push
+		g_pushVal2 = *(DWORD*)(g_oldCode + 3); 		// Extract value from second push
+		g_jmpBackAddrReadFile = g_pReadFileFunc + 7;
+		g_bIsPush = TRUE;
+	}
+	else {
+		printf(" special instruction");
+		return -1;
+	}
+```
+### 3. Insert a Detour (Hook) Function
+Overwrite the initial instructions of the target function with a jmp or call instruction that redirects execution to your custom "Detour Function."
 
 
