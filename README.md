@@ -167,3 +167,32 @@ __declspec(naked) BOOL WINAPI TrampolineReadFileShort(HANDLE hFile,
 	}
 }
 ```
+### 5. Create the Jmp Instruction
+To intercept the target function (e.g., ReadFile), we need to create a jmp instruction that redirects execution to the detour function. When the program calls the target function, it will first jump to the detour function, execute the custom code, and then resume execution of the remaining instructions in the original target function.
+
+The offset for the jmp instruction can be calculated using the formula:
+
+**Offset = Detour Function Address - Target Function Address - Length of JMP Instruction**
+
+Additionally, before writing the jmp instruction into memory, we must modify the memory protection constant because executable pages are typically read-only and executable but not writable. Below is an example implementation:
+```
+// prepare the jmp instruction: jmp + 4-byte relative offset
+	BYTE newEntry[5] = { 0 };
+	newEntry[0] = 0xE9;  //jmp
+	//  Calculate the offset between the hook function and the next instruction after jmp
+	//offset = HookedFunAddr - SystemFunc - CodeLength
+	DWORD dwOffset;
+	dwOffset = (DWORD)HookedReadFile - (DWORD)g_pReadFileFunc - 5;
+	*(DWORD*)(newEntry + 1) = dwOffset;
+
+	//change the memory protection constant to allow writing
+	DWORD dwOldProtect;
+	MEMORY_BASIC_INFORMATION MBI = { 0 };
+	VirtualQuery(g_pReadFileFunc, &MBI, sizeof(MEMORY_BASIC_INFORMATION));
+	VirtualProtect(MBI.BaseAddress, 5, PAGE_EXECUTE_READWRITE, &dwOldProtect);
+	//  Overwrite the first 5 bytes of the target function with the jmp instruction
+	memcpy(g_pReadFileFunc, newEntry, 5);
+	//  Restore original memory protection
+	VirtualProtect(MBI.BaseAddress, 5, dwOldProtect, &dwOldProtect);
+```
+
