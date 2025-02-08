@@ -90,6 +90,40 @@ The following code demonstrates how to handle these two cases:
 	}
 ```
 ### 3. Insert a Detour (Hook) Function
-Overwrite the initial instructions of the target function with a jmp or call instruction that redirects execution to your custom "Detour Function."
+To intercept the target function, we overwrite its initial instructions with a jmp or call instruction that redirects execution to a custom "Detour Function." In this project, we created the HookedReadFile() function as the detour function.
 
+The detour function must match the target function in terms of return value, calling convention, and arguments to ensure compatibility. Within HookedReadFile(), we call the original ReadFile function using a trampoline function and capture the content read by ReadFile (stored in lpBuffer). This content is then saved to a text file (result.txt) for logging purposes.
 
+Below is the implementation of the detour function:
+```
+BOOL WINAPI HookedReadFile(HANDLE hFile,
+	LPVOID lpBuffer,
+	DWORD nNumberOfBytesToRead,
+	LPDWORD lpNumberOfBytesRead,
+	LPOVERLAPPED lpOverlapped) {
+	BOOL result;
+    	// Call the original ReadFile via the appropriate trampoline function
+	if (g_bIsPush) {
+		result = TrampolineReadFileLong(hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, lpOverlapped);
+	}
+	else {
+		result = TrampolineReadFileShort(hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, lpOverlapped);
+	}
+  	// If the target module is detected and data is successfully read, save it to a file
+	if (IsTargetModule() && result && *lpNumberOfBytesRead > 0) {
+		saveBufferToFile("result.txt", lpBuffer, *lpNumberOfBytesRead);
+		printf("printing lpBuffer: %s\n numberRead: %d\n", lpBuffer, *lpNumberOfBytesRead);
+	}
+#ifdef _DEBUG
+    	// Debugging: Print the file path being accessed
+	TCHAR path[MAX_PATH];
+	DWORD dwRet;
+	dwRet = GetFinalPathNameByHandle(hFile, path, MAX_PATH,
+		FILE_NAME_NORMALIZED);
+	printf("file path is: %s\n", path);
+
+#endif
+
+	return result;
+}
+```
