@@ -195,4 +195,7 @@ Additionally, before writing the jmp instruction into memory, we must modify the
 	//  Restore original memory protection
 	VirtualProtect(MBI.BaseAddress, 5, dwOldProtect, &dwOldProtect);
 ```
+### Summary
+The five steps outlined above demonstrate the implementation of an inline hook for the ReadFile function. The control flow before and after applying the hook is illustrated in the diagram below:
+![image](https://github.com/user-attachments/assets/369d0877-dc82-4a93-8ea9-09f75e519038)
 
