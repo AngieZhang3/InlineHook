@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <windows.h>
 
+#define TARGET_FILENAME "test.txt"
+
+
 BYTE g_oldCode[7] = { 0 }; // save old code for readFile
 DWORD g_pushVal1;
 DWORD g_pushVal2;
@@ -11,9 +14,10 @@ PBYTE g_pReadFileFunc; // entry point of the ReadFile function
 PBYTE g_jmpBackAddrReadFile;  // jmp address for readFile
 BOOL g_bIsPush = FALSE;
 
-PBYTE g_pCreateFileAFunc; // entry point of the CreateFile function
-PBYTE g_jmpBackAddrCreateFileA;  // jmp back address for createFile
+PBYTE g_pCreateFileWFunc; // entry point of the CreateFile function
+PBYTE g_jmpBackAddrCreateFileW;  // jmp back address for createFile
 BYTE g_savedCode[5] = { 0 }; // save old code for CreateFile
+
 
 //Check if the module name matches the target program
 BOOL IsTargetModule() {
@@ -34,6 +38,11 @@ BOOL IsTargetModule() {
 	return FALSE;
 }
 
+bool IsFileNameMatch(LPCWSTR fileName) {
+	wchar_t wideTargetFileName[MAX_PATH];
+	MultiByteToWideChar(CP_ACP, 0, TARGET_FILENAME, -1, wideTargetFileName, MAX_PATH);
+	return (wcscmp(fileName, wideTargetFileName) == 0);
+}
 // write the content to a txt file
 int saveBufferToFile(const char* fileName, LPVOID lpBuffer, DWORD dwSize) {
 
@@ -50,10 +59,10 @@ int saveBufferToFile(const char* fileName, LPVOID lpBuffer, DWORD dwSize) {
 	return (nWritten == dwSize) ? 0 : -1;
 }
 
-/*=======================Hook CreateFileA ====================*/
+/*=======================Hook CreateFileW ====================*/
 
-// trampoline function for CreateFileA
-__declspec(naked) HANDLE WINAPI TrampolineCreateFileA(LPCSTR lpFileName,
+// trampoline function for CreateFileW
+__declspec(naked) HANDLE WINAPI TrampolineCreateFileW(LPCWSTR lpFileName,
 	DWORD dwDesiredAccess,
 	DWORD dwShareMode,
 	LPSECURITY_ATTRIBUTES lpSecurityAttributes,
@@ -64,13 +73,13 @@ __declspec(naked) HANDLE WINAPI TrampolineCreateFileA(LPCSTR lpFileName,
 		mov edi, edi
 		push ebp
 		mov ebp, esp
-		jmp g_jmpBackAddrCreateFileA;
+		jmp g_jmpBackAddrCreateFileW;
 	}
 }
 
-// HookedCreateFileA function
-HANDLE HookedCreateFileA(
-	LPCSTR               lpFileName,
+// HookedCreateFileW function
+HANDLE WINAPI HookedCreateFileW(
+	LPCWSTR               lpFileName,
 	DWORD                 dwDesiredAccess,
 	DWORD                 dwShareMode,
 	LPSECURITY_ATTRIBUTES lpSecurityAttributes,
@@ -78,59 +87,75 @@ HANDLE HookedCreateFileA(
 	DWORD                 dwFlagsAndAttributes,
 	HANDLE                hTemplateFile
 ) {
-	HANDLE handle = TrampolineCreateFileA(lpFileName,
+	HANDLE handle = TrampolineCreateFileW(lpFileName,
 		dwDesiredAccess,
 		dwShareMode,
 		lpSecurityAttributes,
 		dwCreationDisposition,
 		dwFlagsAndAttributes,
 		hTemplateFile);
-	if (handle && lpFileName && IsTargetModule()) {
-		// save file name to result.txt
-		printf("printing file name: %s\n", lpFileName);
-		//Calculate the length of the new string(prefix + file name + '\n')
-		int prefixLen = strlen("File name: ");
-		int fileNameLen = strlen(lpFileName);
-		int totalLen = prefixLen + fileNameLen + 1; // add \n
+	if (handle && lpFileName && IsTargetModule() && IsFileNameMatch(lpFileName)) {
+		// Print file name
+		wprintf(L"Printing file name: %ls\n", lpFileName);
+		
+		// Convert wide string to UTF-8
+		int utf8Length = WideCharToMultiByte(CP_UTF8, 0, lpFileName, -1, NULL, 0, NULL, NULL);
+		if (utf8Length > 0) {
+			char* utf8FileName = new char[utf8Length];
+			WideCharToMultiByte(CP_UTF8, 0, lpFileName, -1, utf8FileName, utf8Length, NULL, NULL);
 
-		char* szFileName = new char[totalLen + 1]; // add '\0'
-		strcpy(szFileName, "File name: ");
-		strcat(szFileName, lpFileName);
-		szFileName[totalLen - 1] = '\n';
-		szFileName[totalLen] = '\0';
-		saveBufferToFile("result.txt", szFileName, totalLen);
-		delete[] szFileName;
+			// Prepare the string to be written
+			const char* prefix = "File name: ";
+			int prefixLen = strlen(prefix);
+			int totalLen = prefixLen + utf8Length + 1; // +1 for newline
+
+			char* szFileName = new char[totalLen];
+			strcpy(szFileName, prefix);
+			strcat(szFileName, utf8FileName);
+			szFileName[totalLen - 2] = '\n'; // -2 because utf8Length includes null terminator
+			szFileName[totalLen - 1] = '\0';
+
+			// Save to file
+			saveBufferToFile("result.txt", szFileName, totalLen - 1); // -1 to exclude null terminator
+
+			// Clean up
+			delete[] utf8FileName;
+			delete[] szFileName;
+
+		} 
 	}
+	
+
 	return handle;
 }
 
 // install hook
-int InstallHookCreateFileA() {
+int InstallHookCreateFileW() {
 	//get module name
 	HMODULE hModule = GetModuleHandle("kernel32.dll");
 	if (!hModule) {
 		printf("failed to get hModule");
 		return -1;
 	}
-	// get the original address of the CreateFileA function
-	PBYTE originalCreateFileA = (PBYTE)GetProcAddress(hModule, "CreateFileA");
+	// get the original address of the CreateFileW function
+	PBYTE originalCreateFileW = (PBYTE)GetProcAddress(hModule, "CreateFileW");
 
-	if (!originalCreateFileA) {
-		printf("failed to get orginal CreateFileA Address");
+	if (!originalCreateFileW) {
+		printf("failed to get orginal CreateFileW Address");
 		return -1;
 	}
 
-	// get the first two bytes of CreateFile to check if it starts with a jmp
-	if (*(WORD*)originalCreateFileA == 0x25FF) {
+	// get the first two bytes of CreateFileW to check if it starts with a jmp
+	if (*(WORD*)originalCreateFileW == 0x25FF) {
 		// JMP + pointer to another memory location that contains the actual address of the function
-		DWORD indirectPointer = *(DWORD*)(originalCreateFileA + 2);
+		DWORD indirectPointer = *(DWORD*)(originalCreateFileW + 2);
 		// dereference the pointer to get the real address of the function
 		DWORD realAddress = *(DWORD*)indirectPointer;
-		g_pCreateFileAFunc = (PBYTE)realAddress;
+		g_pCreateFileWFunc = (PBYTE)realAddress;
 	}
 	else {
 		// if not start with JMP, the original address get from GetProcAddress  is the entry point of the CreateFile function
-		g_pCreateFileAFunc = originalCreateFileA;
+		g_pCreateFileWFunc = originalCreateFileW;
 	}
 
 	// prepare the jmp instruction: jmp + 4-byte relative offset
@@ -139,37 +164,37 @@ int InstallHookCreateFileA() {
 	// calculate the offset between next instrution right after jmp and the hook function
 	//offset = HookedFunAddr - SystemFunc - CodeLength
 	DWORD dwOffset;
-	dwOffset = (DWORD)HookedCreateFileA - (DWORD)g_pCreateFileAFunc - 5;
+	dwOffset = (DWORD)HookedCreateFileW - (DWORD)g_pCreateFileWFunc - 5;
 	*(DWORD*)(newEntry + 1) = dwOffset;
 
 	//change the memory protection constant
 	DWORD dwOldProtect;
 	MEMORY_BASIC_INFORMATION MBI = { 0 };
-	VirtualQuery(g_pCreateFileAFunc, &MBI, sizeof(MEMORY_BASIC_INFORMATION));
+	VirtualQuery(g_pCreateFileWFunc, &MBI, sizeof(MEMORY_BASIC_INFORMATION));
 	VirtualProtect(MBI.BaseAddress, 5, PAGE_EXECUTE_READWRITE, &dwOldProtect);
 	// save the old code
-	memcpy(g_savedCode, g_pCreateFileAFunc, 5);
-	g_jmpBackAddrCreateFileA = g_pCreateFileAFunc + 5;
+	memcpy(g_savedCode, g_pCreateFileWFunc, 5);
+	g_jmpBackAddrCreateFileW = g_pCreateFileWFunc + 5;
 
 	// change the firt 5 bytes of the entry point to jmp offset
-	memcpy(g_pCreateFileAFunc, newEntry, 5);
+	memcpy(g_pCreateFileWFunc, newEntry, 5);
 	// change back the memory protection constant
 	VirtualProtect(MBI.BaseAddress, 5, dwOldProtect, &dwOldProtect);
 	return 0;
 }
 // Uninstall Hook
-int UninstallHookCreateFileA() {
+int UninstallHookCreateFileW() {
 	//get module name
 	HMODULE hModule = GetModuleHandle("kernel32.dll");
 	if (!hModule) {
 		printf("failed to get hModule");
 		return -1;
 	}
-	// get the original address of the CreateFileA function
-	PBYTE originalCreateFileA = (PBYTE)GetProcAddress(hModule, "CreateFileA");
+	// get the original address of the CreateFileW function
+	PBYTE originalCreateFileW = (PBYTE)GetProcAddress(hModule, "CreateFileW");
 
-	if (!originalCreateFileA) {
-		printf("failed to get orginal CreateFileA Address");
+	if (!originalCreateFileW) {
+		printf("failed to get orginal CreateFileW Address");
 		return -1;
 	}
 
@@ -177,14 +202,14 @@ int UninstallHookCreateFileA() {
 		//change the memory protection constant
 	DWORD dwOldProtect;
 	MEMORY_BASIC_INFORMATION MBI = { 0 };
-	VirtualQuery(g_pCreateFileAFunc, &MBI, sizeof(MEMORY_BASIC_INFORMATION));
+	VirtualQuery(g_pCreateFileWFunc, &MBI, sizeof(MEMORY_BASIC_INFORMATION));
 	VirtualProtect(MBI.BaseAddress, 5, PAGE_EXECUTE_READWRITE, &dwOldProtect);
 
 	//restore the old code
-	memcpy(g_pCreateFileAFunc, g_savedCode, 5);
+	memcpy(g_pCreateFileWFunc, g_savedCode, 5);
 	// change back the memory protection constant
 	VirtualProtect(MBI.BaseAddress, 5, dwOldProtect, &dwOldProtect);
-	printf("uninstall CreateFileA\n");
+	printf("uninstall CreateFileW\n");
 	return 0;
 
 }
@@ -361,8 +386,9 @@ int UninstallHookReadFile() {
 
 int main()
 {
-	InstallHookCreateFileA();
-	HANDLE hFile = CreateFile("test.txt", GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	//Install Hook
+	InstallHookCreateFileW();
+	HANDLE hFile = CreateFile(TARGET_FILENAME, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE) {
 		printf("Failed to open file. Error: %lu\n", GetLastError());
 		system("pause");
