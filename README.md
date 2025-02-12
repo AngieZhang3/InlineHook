@@ -1,4 +1,10 @@
-# Inline Hook
+# Cross-Platform Ring 3 Inline Hooking for Windows
+## About
+This project demonstrates a universal method for implementing Ring 3 inline hooks on Windows platforms. The technique can be applied to intercept and modify the behavior of nearly any windows API in user mode. By leveraging this approach, developers can monitor, analyze, or modify program behavior at runtime without altering the original source code.
+
+To illustrate this method, we use `CreateFileW` and `ReadFile` as examples. Specifically, we chose to hook `CreateFileW` instead of `CreateFileA` because `CreateFileA` ultimately calls `CreateFileW` internally. By hooking `CreateFileW`, we can effectively intercept both ANSI and Unicode versions of the API. 
+
+This method is compatible across all major Windows versions, including Windows xp, 7, 10, and 11.
 ## Intro 
 Inline hooking is a technique that modifies a program's execution flow by intercepting function calls. 
 The process works by overwriting the first few bytes of a target function with a jump instruction (such as jmp, call, or retn),
@@ -6,15 +12,18 @@ which redirects execution to a custom hook function.
 When the program calls the target function, it first jumps to the hook function, executes the custom code, and then returns to continue the original function's execution. 
 This method effectively creates a detour in the program's normal execution path, allowing for runtime modification of program behavior without changing the original source code.
 ## Implementation 
-This project demonstrates the use of Inline Hooks to intercept two Windows APIs: CreateFileA and ReadFile. Below, we use ReadFile as an example to explain the hook implementation process.
+This project demonstrates the use of Inline Hooks to intercept two Windows APIs: `CreateFileW` and `ReadFile`. Below, we use `ReadFile` as an example to explain the hook implementation process.
 ### Steps to Implement the Hook
 ### 1. Locate the Target Function
 The first step is identifying the memory address of the function to be intercepted, referred to as the "Target Function." <br>
-In this project, the target functions are CreateFileA and ReadFile. To correctly locate their addresses, we analyzed them using x32dbg on Windows 7, 10, and 11.
+In this project, the target functions are `CreateFileW` and `ReadFile`. To correctly locate their addresses, we analyzed them using x32dbg on Windows xp, 7, 10, and 11.
 For ReadFile, the disassembly varies across these operating systems:
-- Windows 7:<br>
+- Windows xp and 7:<br>
   The function call directly points to the entry of ReadFile.
-  ![image](https://github.com/user-attachments/assets/f719a167-230f-4b54-95fd-9ae96fba277e)
+  - windows xp:
+    ![image](https://github.com/user-attachments/assets/dbc61ecf-7921-4eac-8bb4-13c3730946b2)
+  - windows 7:
+    ![image](https://github.com/user-attachments/assets/f719a167-230f-4b54-95fd-9ae96fba277e)
 - Windows 10 and 11:<br>
   The function call first jumps to a jmp instruction, which then redirects to the actual entry point of ReadFile.
   - Windows 10:
@@ -25,7 +34,7 @@ For ReadFile, the disassembly varies across these operating systems:
     ![image](https://github.com/user-attachments/assets/b17e3082-3595-49a2-a0d4-908053a31992)
     
 From this analysis, we observe two cases:
-- On Windows 7, we can directly retrieve the address of ReadFile using GetProcAddress().
+- On Windows xp and 7, we can directly retrieve the address of ReadFile using GetProcAddress().
 - On Windows 10 and 11, we must resolve the jump instruction to find the actual entry point of ReadFile. For example, in Windows 11, after inspecting the jump address (e.g., 777C11EC), we find it points to the start address of ReadFile.
   ![image](https://github.com/user-attachments/assets/a0414338-20a9-432f-97f5-86a884c1abbe)
   ![image](https://github.com/user-attachments/assets/08ec42db-1df0-4738-8945-e38a5e4df341)
@@ -131,7 +140,7 @@ BOOL WINAPI HookedReadFile(HANDLE hFile,
 To ensure precise control over every instruction in the trampoline function, it must be defined as a naked function. This prevents the compiler from automatically inserting additional instructions, such as stack-saving operations or frame pointer setups, which could interfere with the function's behavior.
 Additionally, the trampoline function must have the same type signature as the target function. This ensures compatibility and allows the original function to be invoked seamlessly.
 
-In this project, we implemented two trampoline functions to handle different cases observed in ReadFile across Windows 7, 10, and 11:
+In this project, we implemented two trampoline functions to handle different cases observed in ReadFile across Windows xp, 7, 10, and 11:
 - TrampolineReadFileLong: Handles cases where ReadFile starts with two push instructions followed by a call.
 - TrampolineReadFileShort: Handles cases where ReadFile starts with the instruction sequence mov edi, edi, followed by push ebp and mov ebp, esp.
 
