@@ -1,4 +1,4 @@
-# Cross-Platform Ring 3 Inline Hooking for Windows
+# Ring 3 Inline Hooking For All Windows Platforms
 ## About
 This project demonstrates a universal method for implementing Ring 3 inline hooks on Windows platforms. The technique can be applied to intercept and modify the behavior of nearly any windows API in user mode. By leveraging this approach, developers can monitor, analyze, or modify program behavior at runtime without altering the original source code.
 
